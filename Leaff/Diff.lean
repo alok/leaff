@@ -1,5 +1,9 @@
 import Lean
+import Lean.DeclarationRange
+import Lean.DocString.Extension
 import Batteries.Lean.PersistentHashSet
+import Batteries.Classes.Order
+import Batteries.Data.List.Basic
 import Batteries.Tactic.OpenPrivate
 -- import Leaff.Deriving.Optics
 import Leaff.Hash
@@ -43,7 +47,7 @@ to some hashable type `α` that when changed,
 results in some meaningful difference between two constants.
 For instance the type, name, value of a constant, or whether it is an axiom,
 theorem, or definition. -/
-structure Trait :=
+structure Trait where
   /-- the target type, could be a name, expr, string, etc -/
   α : Type
   /-- the value of a constants trait in the given environment -/
@@ -238,8 +242,6 @@ def mod : Diff → Name
   | .attributeChanged _ _ m => m
   | .extensionEntriesModified _ => Name.anonymous
 
-open Batteries
-
 def mkConstWithLevelParams' (constInfo : ConstantInfo) : Expr :=
 mkConst constInfo.name (constInfo.levelParams.map mkLevelParam)
 
@@ -253,10 +255,8 @@ def summarize (diffs : List Diff) : MessageData := Id.run do
   if diffs == [] then return "No differences found."
   let mut out : MessageData := "Found differences:" ++ Format.line
   let mut diffs := diffs.toArray
-  let _inst : Ord Name := ⟨Name.quickCmp⟩
-  let _inst : Ord (Nat × Name) := lexOrd
-  let _inst : LT (Nat × Name) := ltOfOrd
-  diffs := diffs.qsort (fun a b => (a.prio, a.mod) < (b.prio, b.mod))
+  diffs := diffs.qsort fun a b =>
+    a.prio < b.prio || (a.prio == b.prio && Name.quickLt a.mod b.mod)
   let mut oldmod : Name := Name.anonymous
   for d in diffs do
     let mod := d.mod
@@ -296,17 +296,10 @@ def summarize (diffs : List Diff) : MessageData := Id.run do
 
 end Diff
 
-namespace PersistentEnvExtension
-
-def getImportedState [Inhabited α] (ext : PersistentEnvExtension (Name × α) (Name × α) (NameMap α)) (env : Environment) : NameMap α :=
-RBMap.fromArray (ext.exportEntriesFn (ext.getState env) ++ (ext.toEnvExtension.getState env).importedEntries.flatten) Name.quickCmp
-
--- TODO use mkStateFromImportedEntries maybe?
-end PersistentEnvExtension
 namespace MapDeclarationExtension
 
 def getImportedState [Inhabited α] (ext : MapDeclarationExtension α) (env : Environment) : NameMap α :=
-RBMap.fromArray ((ext.getEntries env).toArray ++ (ext.toEnvExtension.getState env).importedEntries.flatten) Name.quickCmp
+  ext.getState env
 
   -- match env.getModuleIdxFor? declName with
   -- | some modIdx =>
@@ -319,7 +312,7 @@ end MapDeclarationExtension
 namespace TagDeclarationExtension
 
 def getImportedState (ext : TagDeclarationExtension) (env : Environment) : NameSet :=
-RBTree.fromArray ((ext.getEntries env).toArray ++ (ext.toEnvExtension.getState env).importedEntries.flatten) Name.quickCmp
+  ext.getState env
 
 end TagDeclarationExtension
 
@@ -333,8 +326,6 @@ end SimpleScopedEnvExtension
 open Lean Environment
 
 namespace Lean.Environment
-
-open Batteries
 
 def importDiffs (old new : Environment) : List Diff := Id.run do
   let mut out : List Diff := []
@@ -360,28 +351,6 @@ def importDiffs (old new : Environment) : List Diff := Id.run do
       out := .directImportRemoved mod rem :: out
   -- dbg_trace new.header.moduleData[2]!.imports
   pure out
-namespace Leaff.Lean.HashMap
-
-variable [BEq α] [Hashable α]
-/-- copied from Batteries, we copy rather than importing to reduce the std dependency
-and make changing the Lean version used by Leaff easier (hopefully) -/
-instance : ForIn m (HashMap α β) (α × β) where
-  forIn m init f := do
-    let mut acc := init
-    for buckets in m.val.buckets.val do
-      for d in buckets do
-        match ← f d acc with
-        | .done b => return b
-        | .yield b => acc := b
-    return acc
-end Leaff.Lean.HashMap
-
-
--- TODO upstream
-instance [BEq α] [Hashable α] : ForIn m (SMap α β) (α × β) where
-  forIn t init f := do
-    forIn t.map₂ (← forIn t.map₁ init f) f
-
 -- TODO upstream
 deriving instance BEq for DeclarationRanges
 deriving instance BEq for ReducibilityStatus
@@ -391,8 +360,7 @@ instance : ToString ReducibilityStatus where
     | ReducibilityStatus.reducible => "reducible"
     | ReducibilityStatus.semireducible => "semireducible"
     | ReducibilityStatus.irreducible => "irreducible"
-
-open private docStringExt in Lean.findSimpleDocString?
+    | ReducibilityStatus.implicitReducible => "implicitReducible"
 
 /-- Take the diff between an old and new state of some environment extension,
 at the moment we hardcode the extensions we are interested in, as it is not clear how we can go beyond that. -/
@@ -421,24 +389,24 @@ def diffExtension (old new : Environment)
       let ns := MapDeclarationExtension.getImportedState declRangeExt new
       for (a, b) in ns do
         if ignoreInternal && a.isInternalDetail then continue
-        if os.find? (revRenames.findD a a) != b then
+        if os.find? (revRenames.getD a a) != b then
           out := .movedWithinModule a (moduleName new a) :: out
   | `Lean.docStringExt => do -- Note this is ` not ``, as docStringExt is actually private
-      let os := MapDeclarationExtension.getImportedState docStringExt old
-      let ns := MapDeclarationExtension.getImportedState docStringExt new
+      let os := MapDeclarationExtension.getImportedState Lean.docStringExt old
+      let ns := MapDeclarationExtension.getImportedState Lean.docStringExt new
       for (a, doc) in ns do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! os.contains (revRenames.findD a a) then
+        if ! os.contains (revRenames.getD a a) then
           out := .docAdded a (moduleName new a) :: out
         else
-          if os.find! (revRenames.findD a a) != doc then
+          if os.get! (revRenames.getD a a) != doc then
             out := .docChanged a (moduleName new a) :: out
       for (a, _b) in os do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! ns.contains (renames.findD a a) then
-          out := .docRemoved (renames.findD a a) (moduleName new (renames.findD a a)) :: out
+        if ! ns.contains (renames.getD a a) then
+          out := .docRemoved (renames.getD a a) (moduleName new (renames.getD a a)) :: out
   -- TODO fix after https://github.com/leanprover/lean4/commit/47a34316fc03ce936fddd2d3dce44784c5bcdfa9
   -- | ``Lean.reducibilityAttrs => do
   --     let os := PersistentEnvExtension.getImportedState reducibilityAttrs.ext old
@@ -463,39 +431,39 @@ def diffExtension (old new : Environment)
       for a in ns do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! os.contains (revRenames.findD a a) then
+        if ! os.contains (revRenames.getD a a) then
           out := .attributeAdded `protected a (moduleName new a) :: out
       for a in os do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! ns.contains (renames.findD a a) then
-          out := .attributeRemoved `protected (renames.findD a a) (moduleName new (renames.findD a a)) :: out
+        if ! ns.contains (renames.getD a a) then
+          out := .attributeRemoved `protected (renames.getD a a) (moduleName new (renames.getD a a)) :: out
   | ``Lean.noncomputableExt => do
       let os := TagDeclarationExtension.getImportedState noncomputableExt old
       let ns := TagDeclarationExtension.getImportedState noncomputableExt new
       for a in ns do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! os.contains (revRenames.findD a a) then
+        if ! os.contains (revRenames.getD a a) then
           out := .attributeAdded `noncomputable a (moduleName new a) :: out
       for a in os do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! ns.contains (renames.findD a a) then
-          out := .attributeRemoved `noncomputable (renames.findD a a) (moduleName new (renames.findD a a)) :: out
-  | ``Lean.Meta.globalInstanceExtension => do -- TODO test this, is this the relevant ext?
-      let os := Lean.Meta.globalInstanceExtension.getState old
-      let ns := Lean.Meta.globalInstanceExtension.getState new
+        if ! ns.contains (renames.getD a a) then
+          out := .attributeRemoved `noncomputable (renames.getD a a) (moduleName new (renames.getD a a)) :: out
+  | ``Lean.Meta.instanceExtension => do
+      let os := Lean.Meta.instanceExtension.getState old |>.instanceNames
+      let ns := Lean.Meta.instanceExtension.getState new |>.instanceNames
       for (a, _) in ns do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! os.contains (revRenames.findD a a) then
+        if ! os.contains (revRenames.getD a a) then
           out := .attributeAdded `instance a (moduleName new a) :: out
       for (a, _) in os do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! ns.contains (renames.findD a a) then
-          out := .attributeRemoved `instance (renames.findD a a) (moduleName new (renames.findD a a)) :: out
+        if ! ns.contains (renames.getD a a) then
+          out := .attributeRemoved `instance (renames.getD a a) (moduleName new (renames.getD a a)) :: out
   | ``Lean.Meta.simpExtension =>
       let os := SimpleScopedEnvExtension.getImportedState Meta.simpExtension old |>.lemmaNames
       let ns := SimpleScopedEnvExtension.getImportedState Meta.simpExtension new |>.lemmaNames
@@ -507,8 +475,8 @@ def diffExtension (old new : Environment)
       for a in os do
         if ignoreInternal && a.key.isInternalDetail then
           continue
-        if ! ns.contains a then -- TODO (renames.findD a a) then
-          out := .attributeRemoved `simp (renames.findD a.key a.key) (moduleName new (renames.findD a.key a.key)) :: out
+        if ! ns.contains a then -- TODO (renames.getD a a) then
+          out := .attributeRemoved `simp (renames.getD a.key a.key) (moduleName new (renames.getD a.key a.key)) :: out
   -- TODO maybe alias
   -- TODO maybe implementedBy
   -- TODO maybe export?
@@ -532,31 +500,31 @@ def diffExtension (old new : Environment)
       --   if ! (SimplePersistentEnvExtension.getState docStringExt new).contains a then
       --     out := .docRemoved a :: out
   | ``Lean.Linter.deprecatedAttr => do
-      let os := Lean.Linter.deprecatedAttr.ext.getState old
-      let ns := Lean.Linter.deprecatedAttr.ext.getState new
+      let os := Lean.Linter.deprecatedAttr.ext.getState old |>.2
+      let ns := Lean.Linter.deprecatedAttr.ext.getState new |>.2
       for (a, _b) in ns do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! os.contains (revRenames.findD a a) then
+        if ! os.contains (revRenames.getD a a) then
           out := .attributeAdded `deprecated a (moduleName new a) :: out
       for (a, _b) in os do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! ns.contains (renames.findD a a) then
-          out := .attributeRemoved `deprecated (renames.findD a a) (moduleName new (renames.findD a a)) :: out
+        if ! ns.contains (renames.getD a a) then
+          out := .attributeRemoved `deprecated (renames.getD a a) (moduleName new (renames.getD a a)) :: out
   | ``Lean.classExtension => do
       let os := classExtension.getState old
       let ns := classExtension.getState new
       for (a, _b) in ns.outParamMap do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! os.outParamMap.contains (revRenames.findD a a) then
+        if ! os.outParamMap.contains (revRenames.getD a a) then
           out := .attributeAdded `class a (moduleName new a) :: out
       for (a, _b) in os.outParamMap do
         if ignoreInternal && a.isInternalDetail then
           continue
-        if ! ns.outParamMap.contains (renames.findD a a) then
-          out := .attributeRemoved `class (renames.findD a a) (moduleName new (renames.findD a a)) :: out
+        if ! ns.outParamMap.contains (renames.getD a a) then
+          out := .attributeRemoved `class (renames.getD a a) (moduleName new (renames.getD a a)) :: out
   | _ => pure ()
     -- if newEntries.size ≠ oldEntries.size then
     -- -- m!"-- {ext.name} extension: {(newEntries.size - oldEntries.size : Int)} new entries"
@@ -609,61 +577,43 @@ relevantTraits.tail.foldl (fun h t => mixHash (hash (t.val c e)) h) (hash <| rel
 /-- the list of trait combinations used below -/
 def traitCombinations : List (List Trait) := [[name],[value],[name, value],[type],[type, value],[module],[name,module],[value,module],[type,module],[name, value, module],[type, value, module],[species]]
 def constantDiffs (old new : Environment) (ignoreInternal : Bool := true) : List Diff := Id.run do
-  -- dbg_trace new.header.moduleNames
-  -- dbg_trace new.header.moduleData[2]!.imports
-  -- TODO should we use rbmap or hashmap?
-  -- let oldhashes := (HashMap.fold (fun old name const =>
-  --   let ha := (diffHash const)
-  -- let (all, ex) := (HashMap.fold (fun (all, ex) name const =>
-  --   if const.hasValue && ! name.isInternal then (all + 1, ex + 1) else (all + 1, ex)) (0,0) old.constants)
-  -- dbg_trace (all, ex)
-  --   old.insert ha <| (old.findD ha #[]).push name) (mkRBMap UInt64 (Array Name) Ord.compare) old.constants)
-  -- sz is roughly how many non-internal decls we expect, empirically around 1/4th of total
-  -- TODO change if internals included
-  let sz := max (new.constants.fold (fun x y z => x + 1) 0 / 4) (old.constants.fold (fun x y z => x + 1) 0 / 4)
-
-  -- first we make a hashmap of all decls, hashing with `diffHash`, this should cut the space of "interesting" decls down drastically
-  -- TODO reconsider internals, how useful are they
-  -- TODO exclude casesOn recOn?
-  -- dbg_trace "making hashes"
-  let oldhashes := old.constants.fold
-    (fun old name const =>
-      if const.hasValue && (!ignoreInternal || !name.isInternalDetail) then old.insert name else old)
-    (@mkHashSet Name _ ⟨fun n => diffHash (old.constants.find! n) old⟩ sz)
-  -- dbg_trace old.constants.size
-  -- dbg_trace oldhashes.size
-  -- dbg_trace "hashes1 made"
-  let newhashes := new.constants.fold
-    (fun old name const =>
-      if const.hasValue && (!ignoreInternal || !name.isInternalDetail) then old.insert name else old)
-    (@mkHashSet Name _ ⟨fun n => diffHash (new.constants.find! n) new⟩ sz)
-  -- dbg_trace "hash2 made"
-  -- out := out ++ (newnames.sdiff oldnames).toList.map .added
-  -- out := out ++ (oldnames.sdiff newnames).toList.map .removed
-  -- dbg_trace out.length
-  -- dbg_trace (HashSet.sdiff oldhashes newhashes).toList
-  let diff := (HashSet.sdiff oldhashes newhashes).toArray
-  -- dbg_trace "diffs made"
-  let befores := diff.filterMap (fun (di, bef) => if bef then some (old.constants.find! di) else none)
-  let afters := diff.filterMap (fun (di, bef) => if bef then none else some (new.constants.find! di))
-  -- dbg_trace "bas made"
-  -- dbg_trace befores.map ConstantInfo.name
-  -- dbg_trace afters.map ConstantInfo.name
-  -- dbg_trace afters.size
-  -- -- dbg_trace dm.map (fun (c, rem) => (c.name, rem))
-  -- TODO could use hashset here for explained
+  let keepConst (name : Name) (const : ConstantInfo) : Bool :=
+    const.hasValue && (!ignoreInternal || !name.isInternalDetail)
+  let befores := old.constants.fold (fun acc name const =>
+    if !keepConst name const then
+      acc
+    else
+      match new.constants.find? name with
+      | some newConst =>
+          if keepConst name newConst && diffHash const old == diffHash newConst new then
+            acc
+          else
+            acc.push const
+      | none => acc.push const) #[]
+  let afters := new.constants.fold (fun acc name const =>
+    if !keepConst name const then
+      acc
+    else
+      match old.constants.find? name with
+      | some oldConst =>
+          if keepConst name oldConst && diffHash oldConst old == diffHash const new then
+            acc
+          else
+            acc.push const
+      | none => acc.push const) #[]
   let mut out : List Diff := []
   let mut explained : HashSet (Name × Bool) := HashSet.empty
   for t in traitCombinations.toArray.qsort (fun a b => a.length < b.length) do -- TODO end user should be able to customize which traits
     let f := hashExceptMany t
-    let mut hs : HashMap UInt64 (Name × Bool) := HashMap.empty
-    let mut co := true
+    let mut hs : Std.HashMap UInt64 (Name × Bool) := Std.HashMap.emptyWithCapacity befores.size
     -- TODO actually check trait differences when found here!?
     for b in befores do
-      let a := hs.findEntry? (f b old)
       if !explained.contains (b.name, true) then
-        (hs, co) := hs.insert' (f b old) (b.name, true)
-        if co then dbg_trace s!"collision when hashing for {t.map Trait.id}, all bets are off {b.name} {a.get!.2}" -- TODO change to err print
+        let key := f b old
+        let prev? := hs.get? key
+        hs := hs.insert key (b.name, true)
+        if let some prev := prev? then
+          dbg_trace s!"collision when hashing for {t.map Trait.id}, all bets are off {b.name} {prev.2}"
     -- dbg_trace s!"{t.id}"
     -- dbg_trace s!"{hs.toList}"
     for a in afters do
@@ -673,7 +623,7 @@ def constantDiffs (old new : Environment) (ignoreInternal : Bool := true) : List
       -- dbg_trace f a new
       -- [name, type, value, species, module] -- TODO check order
       -- TODO can we make this cleaner
-      if let some (bn, _) := hs.find? (f a new) then
+      if let some (bn, _) := hs.get? (f a new) then
         if t == [name] then
           out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
           explained := explained.insert (a.name, false) |>.insert (bn, true)
@@ -766,16 +716,16 @@ unsafe
 def summarizeDiffImports (oldImports newImports : Array Import) (old new : SearchPath) : IO Unit := timeit "total" <| do
   searchPathRef.set old
   let opts := Options.empty
-  let trustLevel := 1024 -- TODO actually think about this value
+  let trustLevel : UInt32 := 1024 -- TODO actually think about this value
   try
-    withImportModules oldImports opts trustLevel fun oldEnv => do
+    withImportModules oldImports opts (fun oldEnv => do
       -- TODO could be really clever here instead of passing search paths around and try and swap the envs in place
       -- to reduce the need for multiple checkouts, but that seems complicated, and potentially unsafe as mmap is used to load oleans from disk
       searchPathRef.set new
-      withImportModules newImports opts trustLevel fun newEnv => do
-        IO.println <| ← (Diff.summarize (← oldEnv.diff newEnv)).format
+      withImportModules newImports opts (fun newEnv => do
+        IO.println <| ← (Diff.summarize (← oldEnv.diff newEnv)).format) trustLevel) trustLevel
   catch e =>
-    if e.toString.drop (e.toString.length - 14) == "invalid header" then
+    if e.toString.endsWith "invalid header" then
       throw <| IO.userError r"invalid .olean file header, likely due to a Lean version mismatch
         you may wish to disable CHECK_OLEAN_VERSION / LEAN_CHECK_OLEAN_VERSION in your Lean build,
         or manually adjust the Lean version used by Leaff and hope for the best"
@@ -802,7 +752,7 @@ elab "diff " "in" ppLine cmd:command : command => do
 
 /-- `diffs in $command` executes a sequence of commands and then prints the
 environment diff -/
-elab "diffs " ig:"!"? "in" ppLine cmd:command* ("end diffs")? : command => do
+elab "diffs " ig:"!"? "in" ppLine cmd:command* ("end" "diffs")? : command => do
   let oldEnv ← getEnv
   try
     for cmd in cmd do
@@ -812,10 +762,3 @@ elab "diffs " ig:"!"? "in" ppLine cmd:command* ("end diffs")? : command => do
     logInfo (Diff.summarize <| ← oldEnv.diff newEnv ig.isNone)
 
 end cmd
-
-diffs in
-@[deprecated]
-noncomputable
-def a:=1
-diffs in
-attribute [reducible] a

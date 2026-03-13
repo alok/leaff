@@ -11,7 +11,7 @@ def logHashCollisions (e : Environment) : IO Unit := do
   dbg_trace (toString i)
   dbg_trace (toString hashes.size)
   for o in hashes do
-    if o.2.size > 1 && ¬ (o.2.map Prod.snd).all ((o.2.get! 0).2 == ·) then do
+    if o.2.size > 1 && ¬ (o.2.map Prod.snd).all ((o.2[0]!).2 == ·) then do
       dbg_trace (toString o.1)
       for e in o.2 do
         dbg_trace (toString e.1)

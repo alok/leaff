@@ -17,7 +17,11 @@ def runDiffCmd (p : Parsed) : IO UInt32 := do
   let oldSearchPath := p.positionalArg! "oldSearchPath" |>.as! (Array String)
   -- IO.println <| toString <| oldSearchPath
 
-  summarizeDiffImports #[⟨oldModule, false⟩] #[⟨newModule, false⟩] (oldSearchPath.toList.map Coe.coe) (newSearchPath.toList.map Coe.coe)
+  summarizeDiffImports
+    #[{ module := oldModule, isExported := false }]
+    #[{ module := newModule, isExported := false }]
+    (oldSearchPath.toList.map Coe.coe)
+    (newSearchPath.toList.map Coe.coe)
   return 0
 
 unsafe
@@ -27,20 +31,12 @@ def diffCmd : Cmd := `[Cli|
 
   FLAGS: -- TODO copy some from actual diff / gitdiff e.g short, ignore certain diffs etc
     verbose;                    "Declares a flag `--verbose`. This is the description of the flag. Does nothing currently"
-    oldModule : ModuleName;     "Optional: The name of the \"old\" module to be diffed against " ++
-                                "which be can used to reference Lean modules like `Init.Data.Array` " ++
-                                "or Lean files using a relative path like `Init/Data/Array.lean`." ++
-                                "In most use cases this will be the same as `newModule`, and does not need to be set."
+    oldModule : ModuleName;     "Optional: The name of the old module to diff against. This can reference Lean modules like `Init.Data.Array` or Lean files using a relative path like `Init/Data/Array.lean`. In most use cases this will be the same as `newModule`, and does not need to be set."
 
   ARGS:
     -- TODO consider how to include multiple old / new modules
-    newModule     : ModuleName; "The name of the \"new\" module to be diffed against " ++
-                                "which be can used to reference Lean modules like `Init.Data.Array` " ++
-                                "or Lean files using a relative path like `Init/Data/Array.lean`." ++
-                                "In most usage this will simply be a single top level module name, eg. `Mathlib`"
-    oldSearchPath : Array String; "The search path for the old verison of the module, should be a comma separated list of " ++
-                                  "relative paths e.g. `\"./lake-packages/Cli/build/lib\",\"./lake-packages/std/build/lib\",\"./build/lib`," ++
-                                  "as in the `oleanPath` printed by `lake print-paths`"
+    newModule     : ModuleName; "The name of the new module to diff against. This can reference Lean modules like `Init.Data.Array` or Lean files using a relative path like `Init/Data/Array.lean`. In most usage this will simply be a single top level module name, for example `Mathlib`."
+    oldSearchPath : Array String; "The search path for the old version of the module. This should be a comma-separated list of relative paths, for example `\"./lake-packages/Cli/build/lib\",\"./lake-packages/std/build/lib\",\"./build/lib\"`, as in the `oleanPath` printed by `lake print-paths`."
     newSearchPath : Array String; "The search path for the new verison of the module, as previous"
 
   -- The EXTENSIONS section denotes features that
