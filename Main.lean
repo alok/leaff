@@ -37,7 +37,7 @@ def diffCmd : Cmd := `[Cli|
     -- TODO consider how to include multiple old / new modules
     newModule     : ModuleName; "The name of the new module to diff against. This can reference Lean modules like `Init.Data.Array` or Lean files using a relative path like `Init/Data/Array.lean`. In most usage this will simply be a single top level module name, for example `Mathlib`."
     oldSearchPath : Array String; "The search path for the old version of the module. This should be a comma-separated list of relative paths, for example `\"./lake-packages/Cli/build/lib\",\"./lake-packages/std/build/lib\",\"./build/lib\"`, as in the `oleanPath` printed by `lake print-paths`."
-    newSearchPath : Array String; "The search path for the new verison of the module, as previous"
+    newSearchPath : Array String; "The search path for the new version of the module, as above."
 
   -- The EXTENSIONS section denotes features that
   -- were added as an external extension to the library.

@@ -3,10 +3,11 @@ import Lean
 
 open Lean
 
-def sp : SearchPath :=
-["."/".lake" /"build"/"lib","."/".lake" /"packages"/"std"/"build"/"lib","/home/alexanderbest/.elan/toolchains/leanprover--lean4---v4.4.0-rc1/lib/lean"]
-
-#eval summarizeDiffImports #[`Batteries.Classes.RatCast] #[`Batteries.Data.Rat] sp sp
+#eval do
+  let sp ← searchPathRef.get
+  summarizeDiffImports #[`Batteries.Classes.RatCast] #[`Batteries.Data.Rat] sp sp
 -- #eval summarizeDiffImports #[`Mathlib] #[`Mathlib] sp₁ sp₂
 
-#eval summarizeDiffImports #[`test.TestA] #[`test2.Test] sp sp
+#eval do
+  let sp ← searchPathRef.get
+  summarizeDiffImports #[`test.TestA] #[`test2.Test] sp sp

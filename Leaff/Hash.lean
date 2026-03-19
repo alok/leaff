@@ -19,18 +19,3 @@ def logHashCollisions (e : Environment) : IO Unit := do
 elab "hashcol" : command => do
   let e ← getEnv
   Command.liftCoreM  <| logHashCollisions e
-
-hashcol
-
-#eval UInt64.size
-#eval Lean.reservedMacroScope
-#eval (Lean.mkConst `Nat).hash
-#eval (Lean.Expr.lit <| .natVal 0).hash
-#eval (Lean.Expr.lit <| .natVal (2^64)).hash
-
-
-
-#eval hash 0
-#eval hash (2^64)
-#synth Hashable Nat
-#check instHashableNat
