@@ -10,12 +10,12 @@ and it is at least fast enough to run on the scale of `mathlib`.
 Usage
 -----
 
-The main entrypoint is the script `runleaff.sh` to use it you should check out two copies of your project, one for the old version of the library and one for the new (e.g. with `git worktree add ../old/ some-other-branch`), 
-build both by running `lake build` in the corresponding directories, then navigate to the Leaff directory and run
+The main entrypoint is the script `runleaff.sh`. To use it you should check out two copies of your project, one for the old version of the library and one for the new (e.g. with `git worktree add ../old/ some-other-branch`), then navigate to the Leaff directory and run
 ```
 ./runleaff.sh ModuleName /path/to/old-version/ /path/to/new-version/
 ```
 note that the module name will likely just be the name of the library (e.g. `Mathlib`) if want to know all potential downstream changes of some change, but could be more specific, e.g. `MyLibrary.SomeFile`. The paths could be relative to the Leaff directory or absolute.
+`runleaff.sh` builds the requested module in each directory before invoking Leaff, so you do not need to prebuild the two checkouts manually.
 
 E.g. to test from this directory
 ```

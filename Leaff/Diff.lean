@@ -603,17 +603,13 @@ def constantDiffs (old new : Environment) (ignoreInternal : Bool := true) : List
       | none => acc.push const) #[]
   let mut out : List Diff := []
   let mut explained : HashSet (Name × Bool) := HashSet.empty
-  for t in traitCombinations.toArray.qsort (fun a b => a.length < b.length) do -- TODO end user should be able to customize which traits
+  for t in traitCombinations do -- TODO end user should be able to customize which traits
     let f := hashExceptMany t
-    let mut hs : Std.HashMap UInt64 (Name × Bool) := Std.HashMap.emptyWithCapacity befores.size
-    -- TODO actually check trait differences when found here!?
+    let mut hs : Std.HashMap UInt64 (Array Name) := Std.HashMap.emptyWithCapacity befores.size
     for b in befores do
       if !explained.contains (b.name, true) then
         let key := f b old
-        let prev? := hs.get? key
-        hs := hs.insert key (b.name, true)
-        if let some prev := prev? then
-          dbg_trace s!"collision when hashing for {t.map Trait.id}, all bets are off {b.name} {prev.2}"
+        hs := hs.insert key ((hs.getD key #[]).push b.name)
     -- dbg_trace s!"{t.id}"
     -- dbg_trace s!"{hs.toList}"
     for a in afters do
@@ -623,40 +619,67 @@ def constantDiffs (old new : Environment) (ignoreInternal : Bool := true) : List
       -- dbg_trace f a new
       -- [name, type, value, species, module] -- TODO check order
       -- TODO can we make this cleaner
-      if let some (bn, _) := hs.get? (f a new) then
+      if let some bucket := hs.get? (f a new) then
+        let some bn := match bucket.toList with | [bn] => some bn | _ => none
+          | continue
+        let oldConst := old.constants.find! bn
+        let nameChanged := bn != a.name
+        let valueChanged := oldConst.value!.hash != a.value!.hash
+        let typeChanged := oldConst.type.hash != a.type.hash
+        let moduleChanged := moduleName old bn != moduleName new a.name
+        let speciesChanged := speciesDescription oldConst != speciesDescription a
         if t == [name] then
-          out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if nameChanged then
+            out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [value] then
-          out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if valueChanged then
+            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [name, value] then
-          out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
-          out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if nameChanged then
+            out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
+          if valueChanged then
+            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+          if nameChanged || valueChanged then
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [type] then -- this is very unlikely, that the type changes but not the value
-          out := .typeChanged a.name (moduleName new a.name) :: out
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if typeChanged then
+            out := .typeChanged a.name (moduleName new a.name) :: out
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [type, value] then
-          out := .typeChanged a.name (moduleName new a.name) :: out
-          out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if typeChanged then
+            out := .typeChanged a.name (moduleName new a.name) :: out
+          if valueChanged then
+            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+          if typeChanged || valueChanged then
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [name, value, module] then
-          out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
-          out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
-          out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if nameChanged then
+            out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
+          if valueChanged then
+            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+          if moduleChanged then
+            out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
+          if nameChanged || valueChanged || moduleChanged then
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [type, value, module] then
-          out := .typeChanged a.name (moduleName new a.name) :: out
-          out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
-          out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if typeChanged then
+            out := .typeChanged a.name (moduleName new a.name) :: out
+          if valueChanged then
+            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+          if moduleChanged then
+            out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
+          if typeChanged || valueChanged || moduleChanged then
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [species] then
-          out := .speciesChanged a.name (speciesDescription (new.constants.find! bn)) (speciesDescription a) (moduleName new a.name) :: out
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if speciesChanged then
+            out := .speciesChanged a.name (speciesDescription oldConst) (speciesDescription a) (moduleName new a.name) :: out
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t.contains module then -- TODO finish this switch?
-          out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
-          explained := explained.insert (a.name, false) |>.insert (bn, true)
+          if moduleChanged then
+            out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
+            explained := explained.insert (a.name, false) |>.insert (bn, true)
   -- dbg_trace "final"
   for a in afters do
     if !explained.contains (a.name, false) then out := .added a (moduleName new a.name) :: out

@@ -1,7 +1,7 @@
 
 #!/usr/bin/env bash
 
-set -eo pipefail
+set -euo pipefail
 
 # this script is used to run Leaff on a pair of directories
 
@@ -19,4 +19,18 @@ if [ $# -ne 3 ]; then
 	exit 1
 fi
 
-lake exe leaff $1 $(tr ':' ',' <<<"$(eval $(lake --dir $2 env) && echo $LEAN_PATH)") $(tr ':' ',' <<<"$(eval $(lake --dir $3 env) && echo $LEAN_PATH)")
+module="$1"
+olddir="$2"
+newdir="$3"
+
+# Build the requested module in each checkout so the necessary oleans exist.
+lake --dir "$olddir" build "$module" >/dev/null
+lake --dir "$newdir" build "$module" >/dev/null
+
+old_lean_path="$(lake --dir "$olddir" env printenv LEAN_PATH)"
+new_lean_path="$(lake --dir "$newdir" env printenv LEAN_PATH)"
+
+lake exe leaff \
+	"$module" \
+	"$(tr ':' ',' <<<"$old_lean_path")" \
+	"$(tr ':' ',' <<<"$new_lean_path")"
