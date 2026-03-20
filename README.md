@@ -22,6 +22,11 @@ E.g. to test from this directory
 ./runleaff.sh Test.Test test test2
 ```
 
+For a lightweight end-to-end regression check of that sample workflow, run
+```
+./scripts/check-sample.sh
+```
+
 You may face many issues, especially if the diff is too big, if there are different Lean versions use in the libraries, or if there is a different Lean version used to compile the libraries and Leaff itself.
 
 ```diff
