@@ -14,14 +14,17 @@ set -euo pipefail
 
 # example: runleaff.sh Mathlib ../test-mathlib/ ../test-mathlib2/
 
-if [ $# -ne 3 ]; then
-	echo "usage: runleaff.sh module olddir newdir"
+if [ $# -lt 3 ]; then
+	echo "usage: runleaff.sh [leaff flags...] module olddir newdir"
 	exit 1
 fi
 
-module="$1"
-olddir="$2"
-newdir="$3"
+args=("$@")
+n=${#args[@]}
+module="${args[$((n-3))]}"
+olddir="${args[$((n-2))]}"
+newdir="${args[$((n-1))]}"
+extra_args=("${args[@]:0:$((n-3))}")
 
 # Build the requested module in each checkout so the necessary oleans exist.
 lake --dir "$olddir" build "$module" >/dev/null
@@ -30,7 +33,14 @@ lake --dir "$newdir" build "$module" >/dev/null
 old_lean_path="$(lake --dir "$olddir" env printenv LEAN_PATH)"
 new_lean_path="$(lake --dir "$newdir" env printenv LEAN_PATH)"
 
-lake exe leaff \
-	"$module" \
-	"$(tr ':' ',' <<<"$old_lean_path")" \
+cmd=(lake exe leaff)
+if [ ${#extra_args[@]} -gt 0 ]; then
+	cmd+=("${extra_args[@]}")
+fi
+cmd+=(
+	"$module"
+	"$(tr ':' ',' <<<"$old_lean_path")"
 	"$(tr ':' ',' <<<"$new_lean_path")"
+)
+
+"${cmd[@]}"

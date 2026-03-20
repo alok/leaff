@@ -159,7 +159,7 @@ inductive Diff : Type
   | renamed (oldName newName : Name) (namespaceOnly : Bool) (relevantModule : Name)
   | movedToModule (name oldModuleName newModuleName : Name) -- maybe args here
   | proofChanged (name : Name) (isProofRelevant : Bool) (relevantModule : Name) -- TODO maybe value changed also for defs
-  | typeChanged (name : Name) (relevantModule : Name)
+  | typeChanged (name : Name) (oldType newType : Expr) (relevantModule : Name)
   | speciesChanged (name : Name) (fro to : String) (relevantModule : Name) -- species is axiom, def, thm, opaque, quot, induct, ctor, rec
   | movedWithinModule (name : Name) (relevantModule : Name)
   | extensionEntriesModified (ext : Name) -- TODO maybe delete?
@@ -200,7 +200,7 @@ def prio : Diff → Nat
   | .movedWithinModule _ _ => 310
   | .proofChanged _ true _ => 110 -- if the declaration is proof relevant (i.e. a def) then it is more important
   | .proofChanged _ _ _ => 250
-  | .typeChanged _ _ => 100
+  | .typeChanged _ _ _ _ => 100
   | .speciesChanged _ _ _ _ => 140
   | .extensionEntriesModified _ => 150
   | .docChanged _ _ => 240
@@ -224,7 +224,7 @@ def mod : Diff → Name
   | .renamed _ _ _ m
   | .movedWithinModule _ m
   | .proofChanged _ _ m
-  | .typeChanged _ m
+  | .typeChanged _ _ _ m
   | .speciesChanged _ _ _ m
   | .docChanged _ m
   | .docAdded _ m
@@ -245,13 +245,22 @@ def mod : Diff → Name
 def mkConstWithLevelParams' (constInfo : ConstantInfo) : Expr :=
 mkConst constInfo.name (constInfo.levelParams.map mkLevelParam)
 
+structure SummarizeConfig where
+  printChangedTypes : Bool := false
+  showProofChanges : Bool := true
+
+def shouldDisplay (cfg : SummarizeConfig) : Diff → Bool
+  | .proofChanged _ false _ => cfg.showProofChanges
+  | _ => true
+
 -- TODO can we make the output richer,
 -- colours (sort of handled by diff format in github)
 -- but could add some widget magic also?
 -- links / messagedata in the infoview maybe extracted as links somehow
 -- especially for the diffs command
 -- could we even have some form of expr diff?
-def summarize (diffs : List Diff) : MessageData := Id.run do
+def summarize (diffs : List Diff) (cfg : SummarizeConfig := {}) : MessageData := Id.run do
+  let diffs := diffs.filter (shouldDisplay cfg)
   if diffs == [] then return "No differences found."
   let mut out : MessageData := "Found differences:" ++ Format.line
   let mut diffs := diffs.toArray
@@ -272,9 +281,13 @@ def summarize (diffs : List Diff) : MessageData := Id.run do
       | .renamed oldName newName false _                => m!"! renamed {oldName} → {newName}"
       | .movedToModule name oldModuleName newModuleName => m!"! moved {name} from {oldModuleName} to {newModuleName}"
       | .movedWithinModule name _                       => m!"! moved {name} within _  ule"
-      | .proofChanged name true _                       => m!"! value changed for {name}"
+      | .proofChanged name true _                       => m!"! definition changed for {name}"
       | .proofChanged name false _                      => m!"! proof changed for {name}"
-      | .typeChanged name _                             => m!"! type changed for {name}"
+      | .typeChanged name oldType newType _             =>
+          if cfg.printChangedTypes then
+            m!"! type changed for {name}\n  old: {oldType}\n  new: {newType}"
+          else
+            m!"! type changed for {name}"
       | .speciesChanged name fro to _                   => m!"! {name} changed from {fro} to {to}"
       | .extensionEntriesModified ext                   => m!"! extension entry modified for {ext}"
       | .docChanged name _                              => m!"! doc modified for {name}"
@@ -326,6 +339,11 @@ end SimpleScopedEnvExtension
 open Lean Environment
 
 namespace Lean.Environment
+
+def isProofRelevantChange (const : ConstantInfo) : Bool :=
+  match const with
+  | .thmInfo _ => false
+  | _ => true
 
 def importDiffs (old new : Environment) : List Diff := Id.run do
   let mut out : List Diff := []
@@ -628,46 +646,47 @@ def constantDiffs (old new : Environment) (ignoreInternal : Bool := true) : List
         let typeChanged := oldConst.type.hash != a.type.hash
         let moduleChanged := moduleName old bn != moduleName new a.name
         let speciesChanged := speciesDescription oldConst != speciesDescription a
+        let proofRelevant := isProofRelevantChange oldConst
         if t == [name] then
           if nameChanged then
             out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
             explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [value] then
           if valueChanged then
-            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+            out := .proofChanged a.name proofRelevant (moduleName new a.name) :: out
             explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [name, value] then
           if nameChanged then
             out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
           if valueChanged then
-            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+            out := .proofChanged a.name proofRelevant (moduleName new a.name) :: out
           if nameChanged || valueChanged then
             explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [type] then -- this is very unlikely, that the type changes but not the value
           if typeChanged then
-            out := .typeChanged a.name (moduleName new a.name) :: out
+            out := .typeChanged a.name oldConst.type a.type (moduleName new a.name) :: out
             explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [type, value] then
           if typeChanged then
-            out := .typeChanged a.name (moduleName new a.name) :: out
+            out := .typeChanged a.name oldConst.type a.type (moduleName new a.name) :: out
           if valueChanged then
-            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+            out := .proofChanged a.name proofRelevant (moduleName new a.name) :: out
           if typeChanged || valueChanged then
             explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [name, value, module] then
           if nameChanged then
             out := .renamed bn a.name false (moduleName new a.name) :: out -- TODO namespace only?
           if valueChanged then
-            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+            out := .proofChanged a.name proofRelevant (moduleName new a.name) :: out
           if moduleChanged then
             out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
           if nameChanged || valueChanged || moduleChanged then
             explained := explained.insert (a.name, false) |>.insert (bn, true)
         if t == [type, value, module] then
           if typeChanged then
-            out := .typeChanged a.name (moduleName new a.name) :: out
+            out := .typeChanged a.name oldConst.type a.type (moduleName new a.name) :: out
           if valueChanged then
-            out := .proofChanged a.name false (moduleName new a.name) :: out -- TODO check if proof relevant
+            out := .proofChanged a.name proofRelevant (moduleName new a.name) :: out
           if moduleChanged then
             out := .movedToModule a.name (moduleName old bn) (moduleName new a.name) :: out
           if typeChanged || valueChanged || moduleChanged then
@@ -736,7 +755,8 @@ def diff (old new : Environment) (ignoreInternal : Bool := true) : IO (List Diff
 end Lean.Environment
 
 unsafe
-def summarizeDiffImports (oldImports newImports : Array Import) (old new : SearchPath) : IO Unit := timeit "total" <| do
+def summarizeDiffImports (oldImports newImports : Array Import) (old new : SearchPath)
+    (cfg : Diff.SummarizeConfig := {}) : IO Unit := timeit "total" <| do
   searchPathRef.set old
   let opts := Options.empty
   let trustLevel : UInt32 := 1024 -- TODO actually think about this value
@@ -746,7 +766,7 @@ def summarizeDiffImports (oldImports newImports : Array Import) (old new : Searc
       -- to reduce the need for multiple checkouts, but that seems complicated, and potentially unsafe as mmap is used to load oleans from disk
       searchPathRef.set new
       withImportModules newImports opts (fun newEnv => do
-        IO.println <| ← (Diff.summarize (← oldEnv.diff newEnv)).format) trustLevel) trustLevel
+        IO.println <| ← (Diff.summarize (← oldEnv.diff newEnv) cfg).format) trustLevel) trustLevel
   catch e =>
     if e.toString.endsWith "invalid header" then
       throw <| IO.userError r"invalid .olean file header, likely due to a Lean version mismatch

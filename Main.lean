@@ -16,12 +16,17 @@ def runDiffCmd (p : Parsed) : IO UInt32 := do
   -- IO.println <| toString <| newSearchPath
   let oldSearchPath := p.positionalArg! "oldSearchPath" |>.as! (Array String)
   -- IO.println <| toString <| oldSearchPath
+  let cfg : Diff.SummarizeConfig := {
+    printChangedTypes := p.hasFlag "printChangedTypes"
+    showProofChanges := !p.hasFlag "hideProofChanges"
+  }
 
   summarizeDiffImports
     #[{ module := oldModule, isExported := false }]
     #[{ module := newModule, isExported := false }]
     (oldSearchPath.toList.map Coe.coe)
     (newSearchPath.toList.map Coe.coe)
+    cfg
   return 0
 
 unsafe
@@ -31,6 +36,8 @@ def diffCmd : Cmd := `[Cli|
 
   FLAGS: -- TODO copy some from actual diff / gitdiff e.g short, ignore certain diffs etc
     verbose;                    "Declares a flag `--verbose`. This is the description of the flag. Does nothing currently"
+    printChangedTypes;          "Print the old and new types for declarations whose type changed."
+    hideProofChanges;           "Hide theorem proof changes while still showing definition body changes."
     oldModule : ModuleName;     "Optional: The name of the old module to diff against. This can reference Lean modules like `Init.Data.Array` or Lean files using a relative path like `Init/Data/Array.lean`. In most use cases this will be the same as `newModule`, and does not need to be set."
 
   ARGS:

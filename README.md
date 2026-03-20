@@ -12,10 +12,11 @@ Usage
 
 The main entrypoint is the script `runleaff.sh`. To use it you should check out two copies of your project, one for the old version of the library and one for the new (e.g. with `git worktree add ../old/ some-other-branch`), then navigate to the Leaff directory and run
 ```
-./runleaff.sh ModuleName /path/to/old-version/ /path/to/new-version/
+./runleaff.sh [leaff flags...] ModuleName /path/to/old-version/ /path/to/new-version/
 ```
 note that the module name will likely just be the name of the library (e.g. `Mathlib`) if want to know all potential downstream changes of some change, but could be more specific, e.g. `MyLibrary.SomeFile`. The paths could be relative to the Leaff directory or absolute.
 `runleaff.sh` builds the requested module in each directory before invoking Leaff, so you do not need to prebuild the two checkouts manually.
+Useful flags currently include `--printChangedTypes` to print old/new types for type-changed declarations and `--hideProofChanges` to suppress theorem proof changes while still showing definition body changes.
 
 E.g. to test from this directory
 ```
